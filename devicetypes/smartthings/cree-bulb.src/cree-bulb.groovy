@@ -15,15 +15,15 @@
  */
 
 metadata {
-    definition (name: "Cree Bulb", namespace: "smartthings", author: "SmartThings") {
+    definition (name: "Cree Bulb", namespace: "smartthings", author: "SmartThings", ocfDeviceType: "oic.d.light") {
 
         capability "Actuator"
         capability "Configuration"
-        capability "Polling"
         capability "Refresh"
         capability "Switch"
         capability "Switch Level"
         capability "Health Check"
+        capability "Light"
 
         fingerprint profileId: "C05E", inClusters: "0000,0003,0004,0005,0006,0008,1000", outClusters: "0000,0019"
     }
@@ -43,9 +43,9 @@ metadata {
     tiles(scale: 2) {
         multiAttributeTile(name:"switch", type: "lighting", width: 6, height: 4, canChangeIcon: true){
             tileAttribute ("device.switch", key: "PRIMARY_CONTROL") {
-                attributeState "on", label:'${name}', action:"switch.off", icon:"st.switches.light.on", backgroundColor:"#79b821", nextState:"turningOff"
+                attributeState "on", label:'${name}', action:"switch.off", icon:"st.switches.light.on", backgroundColor:"#00A0DC", nextState:"turningOff"
                 attributeState "off", label:'${name}', action:"switch.on", icon:"st.switches.light.off", backgroundColor:"#ffffff", nextState:"turningOn"
-                attributeState "turningOn", label:'${name}', action:"switch.off", icon:"st.switches.light.on", backgroundColor:"#79b821", nextState:"turningOff"
+                attributeState "turningOn", label:'${name}', action:"switch.off", icon:"st.switches.light.on", backgroundColor:"#00A0DC", nextState:"turningOff"
                 attributeState "turningOff", label:'${name}', action:"switch.on", icon:"st.switches.light.off", backgroundColor:"#ffffff", nextState:"turningOn"
             }
             tileAttribute ("device.level", key: "SLIDER_CONTROL") {
@@ -67,12 +67,6 @@ def parse(String description) {
     def resultMap = zigbee.getEvent(description)
     if (resultMap) {
         sendEvent(resultMap)
-        // Temporary fix for the case when Device is OFFLINE and is connected again
-        if (state.lastActivity == null){
-            state.lastActivity = now()
-            sendEvent(name: "deviceWatch-lastActivity", value: state.lastActivity, description: "Last Activity is on ${new Date((long)state.lastActivity)}", displayed: false, isStateChange: true)
-        }
-        state.lastActivity = now()
     }
     else {
         log.debug "DID NOT PARSE MESSAGE for description : $description"
@@ -89,34 +83,30 @@ def on() {
 }
 
 def setLevel(value) {
-    zigbee.setLevel(value) + ["delay 500"] + zigbee.levelRefresh()         //adding refresh because of ZLL bulb not conforming to send-me-a-report
+    zigbee.setLevel(value) + zigbee.onOffRefresh() + zigbee.levelRefresh()       //adding refresh because of ZLL bulb not conforming to send-me-a-report
 }
 
 /**
  * PING is used by Device-Watch in attempt to reach the Device
  * */
 def ping() {
-
-    if (state.lastActivity < (now() - (1000 * device.currentValue("checkInterval"))) ){
-        log.info "ping, alive=no, lastActivity=${state.lastActivity}"
-        state.lastActivity = null
-        return zigbee.levelRefresh()
-    } else {
-        log.info "ping, alive=yes, lastActivity=${state.lastActivity}"
-        sendEvent(name: "deviceWatch-lastActivity", value: state.lastActivity, description: "Last Activity is on ${new Date((long)state.lastActivity)}", displayed: false, isStateChange: true)
-    }
+    return zigbee.levelRefresh()
 }
 
 def refresh() {
-    zigbee.onOffRefresh() + zigbee.levelRefresh() + zigbee.onOffConfig() + zigbee.levelConfig()
-}
-
-def poll() {
     zigbee.onOffRefresh() + zigbee.levelRefresh()
 }
 
+def healthPoll() {
+    log.debug "healthPoll()"
+    def cmds = zigbee.onOffRefresh() + zigbee.levelRefresh()
+    cmds.each{ sendHubCommand(new physicalgraph.device.HubAction(it))}
+}
+
 def configure() {
-    log.debug "Configuring Reporting and Bindings."
-    sendEvent(name: "checkInterval", value: 1200, displayed: false, data: [protocol: "zigbee"])
-    zigbee.onOffConfig() + zigbee.levelConfig() + zigbee.onOffRefresh() + zigbee.levelRefresh()
+    unschedule()
+    runEvery5Minutes("healthPoll")
+    // Device-Watch allows 2 check-in misses from device + ping
+    sendEvent(name: "checkInterval", value: 60 * 12, displayed: false, data: [protocol: "zigbee", hubHardwareId: device.hub.hardwareID])
+    zigbee.onOffRefresh() + zigbee.levelRefresh()
 }
